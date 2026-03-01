@@ -1,0 +1,17 @@
+# Ambiente Virtual (Onde ficam as bibliotecas instaladas)
+.venv311/
+venv/
+ENV/
+
+# Arquivo de Segredos (SUA CHAVE NVIDIA NIM!)
+.env
+
+# Arquivos temporários do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs e arquivos de sistema
+*.log
+.DS_Store
+Thumbs.db
