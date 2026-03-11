@@ -9,23 +9,25 @@ import os
 # ==========================================
 TECLA_INICIAR = 'f7'
 TECLA_TERMINAR = 'f8'
-SAMPLING_RATE = 0.01  # 100Hz é o ideal para movimentos suaves
-# Importante: ROI_OFFSET_X deve ser igual ao do seu App principal
+SAMPLING_RATE = 0.01  # 100Hz
 ROI_OFFSET_X = 960 
 
 def gravar_movimento(nome_magia):
     pontos_gravados = []
+    # Monitoramos estas teclas durante o desenho
+    teclas_game = ['c', 'x', 'z']
+    
     print(f"\n--- Gravador de Rastro: {nome_magia} ---")
-    print(f"1. Posicione o mouse onde a magia começa.")
+    print(f"1. Posicione o mouse no início do desenho.")
     print(f"2. Pressione [{TECLA_INICIAR.upper()}] para iniciar.")
     
-    # Bloqueia a execução até a tecla ser pressionada
     keyboard.wait(TECLA_INICIAR)
     
-    print(">> [GRAVANDO] - Desenhe agora! (Pressione F8 para parar)")
+    print(">> [GRAVANDO] - Desenhe agora!")
+    print(">> DICA: Se o desenho exige apertar C, X ou Z, aperte-as enquanto grava!")
+    print(f">> Pressione [{TECLA_TERMINAR.upper()}] para encerrar.")
     
-    start_time = time.time()
-    last_check = start_time
+    last_check = time.time()
     
     try:
         while not keyboard.is_pressed(TECLA_TERMINAR):
@@ -33,25 +35,29 @@ def gravar_movimento(nome_magia):
             
             if agora - last_check >= SAMPLING_RATE:
                 x, y = pyautogui.position()
+                dt = round(agora - last_check, 4)
                 
-                # Normalização: Salvamos a posição relativa ao centro/offset
-                # Isso permite que o macro funcione mesmo se a janela mudar de lugar
-                rel_x = x - ROI_OFFSET_X
+                # Detectar se alguma tecla de ação está sendo pressionada NO MOMENTO
+                tecla_ativa = None
+                for t in teclas_game:
+                    if keyboard.is_pressed(t):
+                        tecla_ativa = t
+                        break
                 
+                # Salva o ponto com suporte a tecla (compatível com vision_engine)
                 pontos_gravados.append({
-                    "x": int(rel_x),
+                    "x": int(x - ROI_OFFSET_X),
                     "y": int(y),
-                    "wait": round(agora - last_check, 4)
+                    "wait": dt,
+                    "key": tecla_ativa
                 })
                 last_check = agora
             
-            # Pequena pausa para não fritar o processador
             time.sleep(0.001) 
             
     except KeyboardInterrupt:
         pass
 
-    # Ajuste fino: O primeiro ponto não deve esperar para ser executado
     if pontos_gravados:
         pontos_gravados[0]["wait"] = 0
 
@@ -62,30 +68,47 @@ def salvar_calibracao(nome, pontos):
     arquivo = "coordenadas_calibradas.json"
     dados = {}
     
-    # Carrega dados existentes para não sobrescrever outras magias já salvas
     if os.path.exists(arquivo):
         try:
             with open(arquivo, "r", encoding='utf-8') as f:
                 dados = json.load(f)
-        except json.JSONDecodeError:
+        except:
             dados = {}
             
-    # Adiciona ou atualiza a magia no dicionário
+    # Salva usando o nome EXATO do padrão (ex: fireball.png)
     dados[nome] = {"points": pontos}
     
     with open(arquivo, "w", encoding='utf-8') as f:
         json.dump(dados, f, indent=4)
-    print(f"💾 Arquivo '{arquivo}' atualizado!")
+    print(f"💾 Magia '{nome}' salva com sucesso em '{arquivo}'!")
+
+def listar_padroes_disponiveis():
+    if not os.path.exists("padroes"):
+        return []
+    return [f for f in os.listdir("padroes") if f.lower().endswith(('.png', '.jpg'))]
 
 if __name__ == "__main__":
-    # Garante que o nome seja limpo (sem extensões se você preferir)
-    nome = input("Digite o nome da magia (ex: fireball): ").strip()
+    padroes = listar_padroes_disponiveis()
     
-    if nome:
-        rastros = gravar_movimento(nome)
-        if len(rastros) > 10: # Evita salvar cliques acidentais
-            salvar_calibracao(nome, rastros)
-        else:
-            print("❌ Erro: Gravação muito curta ou vazia.")
+    if not padroes:
+        print("❌ Nenhuma imagem encontrada na pasta 'padroes'.")
+        print("Coloque os prints dos feitiços lá antes de gravar os rastros.")
     else:
-        print("❌ Nome inválido.")
+        print("\nPadroes detectados:")
+        for i, p in enumerate(padroes):
+            print(f"{i+1}. {p}")
+        
+        escolha = input("\nEscolha o número do padrão ou digite o nome completo: ").strip()
+        
+        nome_final = ""
+        if escolha.isdigit() and int(escolha) <= len(padroes):
+            nome_final = padroes[int(escolha)-1]
+        else:
+            nome_final = escolha
+
+        if nome_final:
+            rastros = gravar_movimento(nome_final)
+            if len(rastros) > 10:
+                salvar_calibracao(nome_final, rastros)
+            else:
+                print("❌ Gravação muito curta.")

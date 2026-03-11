@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import tkinter as tk  # Necessário para o Listbox
 import threading
 import time
 import keyboard
@@ -39,7 +40,10 @@ class App(ctk.CTk):
         self.tk_img = None 
         
         self.calibration_file = "coordenadas_calibradas.json"
+        self.settings_file = "settings.json"
         self.points_data = self.load_calibration()
+        self.skip_list = self.load_settings() # Carrega os skips salvos
+        
         self.current_editing_pattern = None
         self.temp_points = [] 
         self.stats = {"sucessos": 0, "fracassos": 0, "total": 0}
@@ -50,16 +54,93 @@ class App(ctk.CTk):
         
         self.tab_main = self.tabview.add("Automação")
         self.tab_calibrate = self.tabview.add("Gravar Movimento")
+        self.tab_skip = self.tabview.add("Skip List") # Nova Aba
 
         self.setup_main_tab()
         self.setup_calibrate_tab()
+        self.setup_skip_tab() # Inicializa a nova aba
 
-        # Usando hotkeys registradas (mais leves que loops de while True)
         keyboard.add_hotkey('f6', self.trigger_f6)
         keyboard.add_hotkey('f7', self.trigger_f7)
         keyboard.add_hotkey('f9', self.trigger_f9)
         
         threading.Thread(target=self.listen_hotkeys, daemon=True).start()
+
+    # --- ABA SKIP (NOVA) ---
+    def setup_skip_tab(self):
+        # Frame Principal da Aba
+        self.skip_container = ctk.CTkFrame(self.tab_skip, fg_color="transparent")
+        self.skip_container.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Coluna Esquerda: Disponíveis
+        self.frame_avail = ctk.CTkFrame(self.skip_container)
+        self.frame_avail.pack(side="left", fill="both", expand=True, padx=10)
+        ctk.CTkLabel(self.frame_avail, text="PADRÕES DISPONÍVEIS", font=("Arial", 14, "bold")).pack(pady=5)
+        
+        self.list_available = tk.Listbox(self.frame_avail, bg="#2b2b2b", fg="white", 
+                                        selectbackground="#1f538d", borderwidth=0, font=("Arial", 12))
+        self.list_available.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Coluna Meio: Botões
+        self.frame_mid = ctk.CTkFrame(self.skip_container, fg_color="transparent")
+        self.frame_mid.pack(side="left", padx=10)
+        
+        ctk.CTkButton(self.frame_mid, text="Adicionar >>", width=100, command=self.add_to_skip).pack(pady=10)
+        ctk.CTkButton(self.frame_mid, text="<< Remover", width=100, command=self.remove_from_skip).pack(pady=10)
+
+        # Coluna Direita: Skipados
+        self.frame_skip = ctk.CTkFrame(self.skip_container)
+        self.frame_skip.pack(side="left", fill="both", expand=True, padx=10)
+        ctk.CTkLabel(self.frame_skip, text="LISTA DE SKIP (IGNORAR)", font=("Arial", 14, "bold"), text_color="#e74c3c").pack(pady=5)
+        
+        self.list_skipped = tk.Listbox(self.frame_skip, bg="#2b2b2b", fg="#ff4444", 
+                                      selectbackground="#1f538d", borderwidth=0, font=("Arial", 12))
+        self.list_skipped.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.refresh_skip_ui()
+
+    def refresh_skip_ui(self):
+        self.list_available.delete(0, tk.END)
+        self.list_skipped.delete(0, tk.END)
+        self.update_pattern_list()
+        
+        for p in self.pattern_files:
+            if p in self.skip_list:
+                self.list_skipped.insert(tk.END, p)
+            else:
+                self.list_available.insert(tk.END, p)
+
+    def add_to_skip(self):
+        items = self.list_available.curselection()
+        for i in items:
+            name = self.list_available.get(i)
+            if name not in self.skip_list:
+                self.skip_list.append(name)
+        self.save_settings()
+        self.refresh_skip_ui()
+
+    def remove_from_skip(self):
+        items = self.list_skipped.curselection()
+        for i in items:
+            name = self.list_skipped.get(i)
+            if name in self.skip_list:
+                self.skip_list.remove(name)
+        self.save_settings()
+        self.refresh_skip_ui()
+
+    def save_settings(self):
+        with open(self.settings_file, "w") as f:
+            json.dump({"skip_list": self.skip_list}, f)
+
+    def load_settings(self):
+        if os.path.exists(self.settings_file):
+            try:
+                with open(self.settings_file, "r") as f:
+                    return json.load(f).get("skip_list", [])
+            except: return []
+        return []
+
+    # --- RESTANTE DAS FUNÇÕES (ADAPTADAS) ---
 
     def setup_main_tab(self):
         self.status_label = ctk.CTkLabel(self.tab_main, text="AGUARDANDO START (F5)", font=("Arial", 24, "bold"), text_color="#555")
@@ -163,55 +244,42 @@ class App(ctk.CTk):
             self.canvas.delete("pt", "ghost")
 
     def update_rec_label(self, texto, cor):
-        # Só tenta atualizar se o atributo existir e o widget estiver vivo
         if hasattr(self, 'hud_rec_status') and self.hud_rec_status.winfo_exists():
             self.hud_rec_status.configure(text=texto, text_color=cor)
         else:
-            # Caso não esteja no HUD, loga no console ou atualiza o status da aba
             self.lbl_rec_status.configure(text=texto, text_color=cor)
             logging.info(f"Status Rec: {texto}")
 
     def record_loop(self):
         last_check = time.time()
         teclas_monitoradas = ['c', 'x', 'z']
-        
         while self.recording:
             agora = time.time()
             if agora - last_check >= SAMPLING_RATE:
                 x, y = pyautogui.position()
                 dt = round(agora - last_check, 4)
-                
                 tecla_pressionada = None
                 for t in teclas_monitoradas:
                     if keyboard.is_pressed(t):
                         tecla_pressionada = t
                         break 
-                
                 self.temp_points.append({
                     "x": int(x - ROI_OFFSET_X), 
                     "y": int(y), 
                     "wait": dt,
                     "key": tecla_pressionada
                 })
-                
                 last_check = agora
-                # Importante: redraw_canvas agora deve usar o canvas_hud se estiver ativo
                 self.after(0, self.redraw_canvas)
             time.sleep(0.001)
 
     def redraw_canvas(self):
-        self.canvas.delete("pt")
+        cv = self.canvas_hud if (self.full_calib_active and hasattr(self, 'canvas_hud')) else self.canvas
+        cv.delete("pt")
         if not self.temp_points or not self.show_points_active: return
-        
-        # Desenho em lote para evitar lag
         for p in self.temp_points:
-            # Compatibilidade Lista vs Dicionário
-            if isinstance(p, list):
-                dx, dy = p[0] + ROI_OFFSET_X, p[1]
-            else:
-                dx, dy = p.get("x", 0) + ROI_OFFSET_X, p.get("y", 0)
-            
-            self.canvas.create_oval(dx-1, dy-1, dx+1, dy+1, fill="#00FFFF", outline="", tags="pt")
+            dx, dy = (p[0] + ROI_OFFSET_X, p[1]) if isinstance(p, list) else (p.get("x", 0) + ROI_OFFSET_X, p.get("y", 0))
+            cv.create_oval(dx-1, dy-1, dx+1, dy+1, fill="#00FFFF", outline="", tags="pt")
 
     def start_ghost_preview(self):
         if not self.temp_points or self.is_playing_preview: return
@@ -219,82 +287,51 @@ class App(ctk.CTk):
 
     def ghost_playback_thread(self):
         self.is_playing_preview = True
-        ghost = self.canvas.create_oval(0,0,0,0, fill="#00FF00", outline="white", width=2, tags="ghost")
+        cv = self.canvas_hud if (self.full_calib_active and hasattr(self, 'canvas_hud')) else self.canvas
+        ghost = cv.create_oval(0,0,0,0, fill="#00FF00", outline="white", width=2, tags="ghost")
         for p in self.temp_points:
             if not self.show_points_active: break
-            
-            if isinstance(p, list):
-                dx, dy, wait = p[0] + ROI_OFFSET_X, p[1], 0.01
-            else:
-                dx, dy, wait = p.get("x", 0) + ROI_OFFSET_X, p.get("y", 0), p.get("wait", 0.01)
-
-            self.canvas.coords(ghost, dx-6, dy-6, dx+6, dy+6)
-            self.canvas.tag_raise("ghost")
+            dx, dy, wait = (p[0] + ROI_OFFSET_X, p[1], 0.01) if isinstance(p, list) else (p.get("x", 0) + ROI_OFFSET_X, p.get("y", 0), p.get("wait", 0.01))
+            cv.coords(ghost, dx-6, dy-6, dx+6, dy+6)
+            cv.tag_raise("ghost")
             time.sleep(wait)
-        self.canvas.delete("ghost")
+        cv.delete("ghost")
         self.is_playing_preview = False
 
     def toggle_full_calibration(self):
         self.full_calib_active = not self.full_calib_active
-        
         if self.full_calib_active:
-            # Esconde a janela principal para não atrapalhar a visão do jogo
             self.withdraw() 
-            
-            # Cria uma janela de HUD dedicada para gravação (Overlay)
             self.hud_window = ctk.CTkToplevel(self)
             self.hud_window.geometry(f"{SCREEN_W}x{SCREEN_H}+0+0")
             self.hud_window.overrideredirect(True)
-            self.hud_window.attributes("-topmost", True)
-            self.hud_window.attributes("-transparentcolor", "black")
+            self.hud_window.attributes("-topmost", True, "-transparentcolor", "black")
             self.hud_window.config(bg="black")
-            
-            # Label de status dentro dessa nova janela
-            self.hud_rec_status = ctk.CTkLabel(
-                self.hud_window, 
-                text="MODO GRAVAÇÃO: F6 para Iniciar | F7 para Parar", 
-                font=("Arial", 20, "bold"),
-                text_color="yellow"
-            )
+            self.hud_rec_status = ctk.CTkLabel(self.hud_window, text="MODO GRAVAÇÃO: F6 (Start) | F7 (Stop) | F9 (Sair)", font=("Arial", 20, "bold"), text_color="yellow")
             self.hud_rec_status.pack(pady=50)
-            
-            # Canvas de desenho (agora filho da hud_window)
-            self.canvas_hud = ctk.CTkCanvas(
-                self.hud_window, width=SCREEN_W, height=SCREEN_H, 
-                bg="black", highlightthickness=0
-            )
+            self.canvas_hud = ctk.CTkCanvas(self.hud_window, width=SCREEN_W, height=SCREEN_H, bg="black", highlightthickness=0)
             self.canvas_hud.pack()
-            
         else:
-            if hasattr(self, 'hud_window'):
-                self.hud_window.destroy()
-            self.deiconify() # Volta com a janela principal
+            if hasattr(self, 'hud_window'): self.hud_window.destroy()
+            self.deiconify()
 
     def load_pattern_to_canvas(self, filename):
         self.current_editing_pattern = filename
         path = os.path.join("padroes", filename)
         if os.path.exists(path):
             img = Image.open(path).convert("RGBA")
-            # Processamento otimizado de transparência
-            alpha = img.getchannel('A')
-            alpha = alpha.point(lambda i: i * 0.4)
+            alpha = img.getchannel('A').point(lambda i: i * 0.4)
             img.putalpha(alpha)
-            
             img = img.resize((SCREEN_W - ROI_OFFSET_X, SCREEN_H))
             self.tk_img = ImageTk.PhotoImage(img)
             self.canvas.delete("bg")
             self.canvas.create_image(ROI_OFFSET_X, 0, anchor="nw", image=self.tk_img, tags="bg")
-        
         data_json = self.points_data.get(filename, {})
         self.temp_points = data_json.get("points", [])
         self.show_points_active = False
         self.btn_preview.configure(text="👁 VER RASTRO", fg_color="#555")
         self.canvas.delete("pt", "ghost")
-
-        if self.temp_points:
-            self.update_rec_label("✅ GRAVADO COM SUCESSO!", "#00FF00")
-        else:
-            self.update_rec_label("F6: Rec | F7: Stop | F9: Modo HUD", "white")
+        self.update_rec_label("✅ CARREGADO" if self.temp_points else "AGUARDANDO REC", "white")
 
     def toggle_hud_mode(self):
         if not self.hud_active:
@@ -346,7 +383,7 @@ class App(ctk.CTk):
                 hk = self.combo_hotkey.get().lower()
                 if keyboard.is_pressed(hk):
                     self.after(0, self.toggle_macro)
-                    time.sleep(1.0) # Debounce
+                    time.sleep(1.0) 
             except: pass
             time.sleep(0.05)
 
@@ -375,11 +412,17 @@ class App(ctk.CTk):
             class StatusProxy:
                 def configure(self, **kwargs):
                     if "text" in kwargs: 
-                        # Usa after para atualizar UI com segurança
                         app.after(0, lambda: dual_status_update(kwargs["text"], kwargs.get("text_color")))
             
-            # BLOQUEANTE: O run_macro agora só retorna quando o ciclo de 3s acabar
-            run_macro(cmd, StatusProxy(), self.update_stats, console)
+            # Chamada enviando o sensor de F5 e a lista de skip
+            run_macro(
+                comando=cmd, 
+                status_widget=StatusProxy(), 
+                stats_callback=self.update_stats, 
+                get_running_status=lambda: self.running, 
+                tecla_console=console,
+                skip_list=self.skip_list
+            )
             
             if not self.running: break
 
