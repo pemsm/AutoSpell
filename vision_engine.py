@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 def capturar_brilho():
     """Calcula a média de brilho na ROI direita para validar sucesso."""
     try:
+        # Captura apenas a área onde o brilho do sucesso costuma aparecer
         img = np.array(ImageGrab.grab(bbox=(ROI_OFFSET_X, 0, SCREEN_W, SCREEN_H)))
         return np.mean(img)
     except Exception as e:
@@ -35,7 +36,7 @@ def identificar_padrao_na_tela():
         print_bgr = cv2.cvtColor(print_completo, cv2.COLOR_RGB2BGR)
         print_gray = cv2.cvtColor(print_bgr, cv2.COLOR_BGR2GRAY)
         
-        # Processamento para destacar o rastro
+        # Processamento para destacar o rastro (Thresholding)
         _, print_thresh = cv2.threshold(print_gray, 150, 255, cv2.THRESH_BINARY)
         kernel = np.ones((3,3), np.uint8)
         print_thresh = cv2.morphologyEx(print_thresh, cv2.MORPH_OPEN, kernel)
@@ -56,7 +57,7 @@ def identificar_padrao_na_tela():
             h_p, w_p = print_thresh.shape[:2]
             h_t, w_t = template_thresh.shape[:2]
             
-            # Redimensiona template se for maior que a tela capturada
+            # Redimensiona template se for maior que a tela capturada (prevenção de erro OpenCV)
             if h_t >= h_p or w_t >= w_p:
                 template_thresh = cv2.resize(template_thresh, (w_p - 10, h_p - 10))
 
@@ -65,7 +66,7 @@ def identificar_padrao_na_tela():
             
             if max_val > maior_score:
                 maior_score = max_val
-                if max_val > 0.40: # Threshold de confiança
+                if max_val > 0.40: # Threshold de confiança (0.40 a 0.70 costuma ser ideal)
                     melhor_match = arq
                     
         return melhor_match
@@ -75,73 +76,72 @@ def identificar_padrao_na_tela():
 
 def run_macro(comando, status_widget, stats_callback, get_running_status, tecla_console="f8", skip_list=[]):
     """
-    Executa o macro restaurando a ordem funcional com suporte a Skip List.
+    Executa o ciclo do macro. 
+    Ajustado para interagir corretamente com os timers de sobrevivência no main.py.
     """
     try:
-        # --- PASSO 0: CHECKPOINT INICIAL ---
         if not get_running_status(): return
 
-        # --- PASSO 1: ABRIR CONSOLE E INVOCAR ---
-        status_widget.configure(text="Abrindo Console...", text_color="yellow")
+        # --- PASSO 1: INVOCAR COMANDO ---
+        status_widget.configure(text="Invocando Comando...", text_color="yellow")
         pyautogui.press(tecla_console)
-        time.sleep(0.5)
+        time.sleep(0.4)
         
-        pyautogui.write(comando, interval=0.05)
+        pyautogui.write(comando, interval=0.03)
         time.sleep(0.2)
         pyautogui.press('enter')
-        time.sleep(0.3)
+        time.sleep(0.2)
         
-        # Fecha console para permitir a visão do padrão
+        # Fecha console para não atrapalhar a visão do padrão
         pyautogui.press(tecla_console) 
-        time.sleep(0.8) 
+        time.sleep(1.0) # Tempo para a animação do minigame surgir
 
         # --- PASSO 2: IDENTIFICAR PADRÃO ---
-        status_widget.configure(text="Analisando Padrão...", text_color="cyan")
+        status_widget.configure(text="Escaneando Tela...", text_color="cyan")
         nome_padrao = identificar_padrao_na_tela()
 
-        # --- PASSO 3: LÓGICA DE SKIP (Identificou, mas está na lista negra) ---
+        # Lógica de Skip List
         if nome_padrao and nome_padrao in skip_list:
-            status_widget.configure(text=f"SKIP: {nome_padrao}", text_color="#f39c12")
+            status_widget.configure(text=f"IGNORANDO: {nome_padrao}", text_color="#f39c12")
             pyautogui.press('esc')
-            # Aguarda um pouco antes de permitir o próximo ciclo
-            for _ in range(15): 
-                if not get_running_status(): return
-                time.sleep(0.1)
+            time.sleep(1.5)
             return
 
         if not nome_padrao:
-            logging.warning("Padrão não identificado.")
+            status_widget.configure(text="Padrão não encontrado", text_color="red")
             pyautogui.press('esc')
-            time.sleep(2.0)
+            time.sleep(1.5)
             return
 
-        # --- PASSO 4: CARREGAR COORDENADAS ---
-        if not os.path.exists("coordenadas_calibradas.json"): return
+        # --- PASSO 3: CARREGAR DADOS ---
+        if not os.path.exists("coordenadas_calibradas.json"):
+            status_widget.configure(text="Erro: JSON não existe", text_color="red")
+            return
+            
         with open("coordenadas_calibradas.json", "r") as f:
             all_data = json.load(f)
         
         config = all_data.get(nome_padrao)
         if not config or "points" not in config:
+            status_widget.configure(text="Padrão sem calibração", text_color="red")
             pyautogui.press('esc')
             return
 
         points = config["points"]
         p0 = points[0]
         
-        # Coordenadas do ponto inicial
+        # Ponto inicial do rastro
         start_x = (p0[0] if isinstance(p0, list) else p0["x"]) + ROI_OFFSET_X
         start_y = p0[1] if isinstance(p0, list) else p0["y"]
 
-        # --- PASSO 5: POSICIONAMENTO ---
-        status_widget.configure(text="Posicionando Mouse...", text_color="white")
-        pyautogui.moveTo(start_x, start_y, duration=0.4) 
-        time.sleep(0.1)
+        # --- PASSO 4: EXECUÇÃO DO RASTRO ---
+        status_widget.configure(text=f"Executando: {nome_padrao}", text_color="#FF8C00")
+        pyautogui.moveTo(start_x, start_y, duration=0.3) 
         
         if not get_running_status(): return
 
-        # --- PASSO 6: INICIAR MINIGAME E RASTRO ---
-        status_widget.configure(text=f"Executando {nome_padrao}", text_color="#FF8C00")
-        pyautogui.press('x')
+        # Tecla de gatilho do minigame (ajuste conforme o jogo, 'x' ou 'z')
+        pyautogui.press('x') 
         time.sleep(1.1) 
         
         pyautogui.mouseDown()
@@ -151,33 +151,36 @@ def run_macro(comando, status_widget, stats_callback, get_running_status, tecla_
                 return
                 
             curr_x, curr_y = (p[0], p[1]) if isinstance(p, list) else (p["x"], p["y"])
+            # Movimentação precisa para o ponto
             pyautogui.moveTo(curr_x + ROI_OFFSET_X, curr_y)
             
-            # Pressiona teclas (C, X, Z) se gravadas no ponto
+            # Pressiona teclas específicas (C, X, Z) se existirem no ponto gravado
             if isinstance(p, dict) and p.get("key"):
                 pyautogui.press(p["key"])
 
+            # Wait gravado ou fallback de segurança
             wait_time = p.get("wait", 0.005) if isinstance(p, dict) else 0.005
             time.sleep(max(0, wait_time))
 
         pyautogui.mouseUp()
 
-        # --- PASSO 7: FINALIZAÇÃO E VALIDAÇÃO ---
-        status_widget.configure(text="Sucesso! Resetando...", text_color="green")
+        # --- PASSO 5: VALIDAÇÃO ---
+        status_widget.configure(text="Ciclo Finalizado", text_color="green")
         
-        # Espera o minigame fechar e o brilho estabilizar
-        for _ in range(30): 
+        # Aguarda o fim da animação do feitiço para ler o brilho
+        for _ in range(25): 
             if not get_running_status(): return
             time.sleep(0.1)
         
-        if capturar_brilho() > 90:
+        brilho = capturar_brilho()
+        if brilho > 95: # Valor de brilho indicativo de sucesso
             stats_callback('sucessos')
         else:
             stats_callback('fracassos')
-            pyautogui.press('esc')
+            pyautogui.press('esc') # Garante que fechou qualquer resíduo do minigame
 
     except Exception as e:
         logging.exception("Erro crítico no vision_engine:")
         pyautogui.press('esc')
         status_widget.configure(text="Erro no Ciclo", text_color="red")
-        time.sleep(2.0)
+        time.sleep(1.0)
