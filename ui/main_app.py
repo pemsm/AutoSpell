@@ -8,7 +8,7 @@ import os
 import logging
 from PIL import Image, ImageTk
 
-# Imports da estrutura modular - IMPORTANTE: Ajustado para usar as funções inteligentes
+# Imports da estrutura modular
 from core.vision_engine import run_macro
 from utils.config_manager import load_json, save_json
 
@@ -43,16 +43,15 @@ class AutoSpellApp(ctk.CTk):
         self.start_session_time = 0
         self.stats = {"sucessos": 0, "fracassos": 0, "total": 0}
 
-        # --- AJUSTE DE DIRETÓRIOS ---
-        # Agora usamos apenas os nomes dos arquivos, o ConfigManager cuida do resto
+        # --- CONFIGURAÇÃO DE DIRETÓRIOS ---
         self.calibration_filename = "coordenadas_calibradas.json"
         self.settings_filename = "settings.json"
         
-        # Para a pasta de padrões, mantemos a lógica de busca manual
+        # Define o caminho da pasta de padrões relativo ao arquivo atual
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.padroes_dir = os.path.join(base_dir, "padroes")
         
-        # Inicializa dados usando o ConfigManager inteligente
+        # Inicializa dados
         self.points_data = load_json(self.calibration_filename, default={})
         settings = load_json(self.settings_filename, default={"skip_list": []})
         self.skip_list = settings.get("skip_list", [])
@@ -195,7 +194,6 @@ class AutoSpellApp(ctk.CTk):
                 decorrido_min = (agora - self.start_session_time) / 60
                 
                 val_quit = self.entry_quit_game.get()
-                val_shut = self.entry_shutdown_pc.get()
                 if val_quit.isdigit() and int(val_quit) > 0 and decorrido_min >= int(val_quit):
                     os.system("taskkill /f /im ProjectZomboid64.exe")
                     self.running = False; break
@@ -217,6 +215,14 @@ class AutoSpellApp(ctk.CTk):
         finally:
             self.running = False
             dual_status_update("Macro Pausado", "white")
+
+    def toggle_macro(self):
+        self.running = not self.running
+        color = "#2ecc71" if self.running else "#e74c3c"
+        txt = "STATUS: RODANDO" if self.running else "STATUS: PARADO"
+        self.status_label.configure(text=txt, text_color=color)
+        if self.running:
+            threading.Thread(target=self.macro_loop, daemon=True).start()
 
     def setup_skip_tab(self):
         self.skip_container = ctk.CTkFrame(self.tab_skip, fg_color="transparent")
@@ -426,9 +432,8 @@ class AutoSpellApp(ctk.CTk):
             except: pass
             time.sleep(0.05)
 
-    def toggle_macro(self):
-        self.running = not self.running
-        color = "#28a745" if self.running else "#ff4444"
-        txt = "STATUS: RODANDO" if self.running else "STATUS: PARADO"
-        self.status_label.configure(text=txt, text_color=color)
-        if self.running: threading.Thread(target=self.macro_loop, daemon=True).start()
+# --- EXECUÇÃO DO APP ---
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    app = AutoSpellApp()
+    app.mainloop()
