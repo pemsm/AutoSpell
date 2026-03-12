@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import tkinter as tk  
+from tkinter import messagebox # Import necessário para o alerta visual
 import threading
 import time
 import keyboard
@@ -12,6 +13,9 @@ import sys
 from PIL import Image, ImageTk
 from vision_engine import run_macro
 from keyauth import api 
+
+# --- GARANTIA DE DIRETÓRIO ---
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # --- CONFIGURAÇÃO DE LOGS ---
 logging.basicConfig(
@@ -40,13 +44,21 @@ def getchecksum():
         logging.error(f"Erro no Checksum: {e}")
         return ""
 
-# Inicialização da API KeyAuth
-keyauthapp = api(
-    name = "Wizard HUD - Ghost Edition", 
-    ownerid = "TqGr3LrSGL", 
-    version = "1.0", 
-    hash_to_check = getchecksum()
-)
+# --- INICIALIZAÇÃO SEGURA DO KEYAUTH ---
+# Envolvemos em um try/except para que o erro de versão não feche o terminal sem aviso
+try:
+    keyauthapp = api(
+        name = "Wizard HUD - Ghost Edition", 
+        ownerid = "TqGr3LrSGL", 
+        version = "1.1.0", # Versão atualizada conforme o painel
+        hash_to_check = getchecksum()
+    )
+except Exception as e:
+    # Se der erro de versão ou conexão, mostra a caixa de mensagem antes de fechar
+    root_temp = tk.Tk()
+    root_temp.withdraw()
+    messagebox.showerror("Erro de Inicialização", f"Ocorreu um erro ao conectar ao servidor:\n\n{e}\n\nVerifique sua conexão ou se a versão (1.1.0) está correta.")
+    os._exit(1)
 
 # --- JANELA DE LOGIN & REGISTRO ---
 class LoginWindow(ctk.CTk):
@@ -56,6 +68,7 @@ class LoginWindow(ctk.CTk):
         self.geometry("400x550")
         self.attributes("-topmost", True)
         self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self.fechar_completo)
         
         self.is_register_mode = False
 
@@ -65,17 +78,14 @@ class LoginWindow(ctk.CTk):
         self.subtitle = ctk.CTkLabel(self, text="GHOST EDITION", font=("Arial", 12))
         self.subtitle.pack(pady=(0, 20))
 
-        # Campos de Input
         self.entry_user = ctk.CTkEntry(self, placeholder_text="Usuário", width=300, height=40)
         self.entry_user.pack(pady=10)
 
         self.entry_pass = ctk.CTkEntry(self, placeholder_text="Senha", width=300, height=40, show="*")
         self.entry_pass.pack(pady=10)
 
-        # Campo de Key (Invisível por padrão, aparece no Registro)
         self.entry_key = ctk.CTkEntry(self, placeholder_text="Chave de Ativação (License)", width=300, height=40)
         
-        # Botões
         self.btn_action = ctk.CTkButton(self, text="ENTRAR", fg_color="#1f538d", hover_color="#14375e", height=45, command=self.executar_auth)
         self.btn_action.pack(pady=(20, 10))
 
@@ -86,6 +96,12 @@ class LoginWindow(ctk.CTk):
         self.status_label.pack(pady=20)
 
         threading.Thread(target=self.iniciar_keyauth, daemon=True).start()
+
+    def fechar_completo(self):
+        try: keyboard.unhook_all()
+        except: pass
+        self.destroy()
+        os._exit(0)
 
     def toggle_mode(self):
         self.is_register_mode = not self.is_register_mode
@@ -122,14 +138,9 @@ class LoginWindow(ctk.CTk):
 
         def auth_thread():
             try:
-                global keyauthapp
-                
                 if self.is_register_mode:
                     if not key:
-                        self.after(0, lambda: [
-                            self.status_label.configure(text="Insira a License Key!", text_color="orange"), 
-                            self.btn_action.configure(state="normal")
-                        ])
+                        self.after(0, lambda: [self.status_label.configure(text="Insira a License Key!", text_color="orange"), self.btn_action.configure(state="normal")])
                         return
                     success, msg = keyauthapp.register(user, password, key)
                 else:
@@ -137,34 +148,28 @@ class LoginWindow(ctk.CTk):
 
                 if success:
                     self.after(0, lambda: self.status_label.configure(text=f"Sucesso: {msg}", text_color="green"))
-                    self.after(1000, self.liberar_acesso)
+                    self.after(500, self.liberar_acesso)
                 else:
-                    self.after(0, lambda m=msg: [
-                        self.status_label.configure(text=f"Erro: {m}", text_color="red"), 
-                        self.btn_action.configure(state="normal")
-                    ])
-
+                    self.after(0, lambda m=msg: [self.status_label.configure(text=f"Erro: {m}", text_color="red"), self.btn_action.configure(state="normal")])
             except Exception as e:
-                error_str = str(e)
-                self.after(0, lambda err=error_str: [
-                    self.status_label.configure(text=f"Erro Técnico: {err}", text_color="red"), 
-                    self.btn_action.configure(state="normal")
-                ])
+                self.after(0, lambda err=str(e): [self.status_label.configure(text=f"Erro Técnico: {err}", text_color="red"), self.btn_action.configure(state="normal")])
 
         threading.Thread(target=auth_thread, daemon=True).start()
 
     def liberar_acesso(self):
-        self.destroy() 
+        self.withdraw()
         app = App()
         app.mainloop()
+        self.destroy()
 
 # --- APLICAÇÃO PRINCIPAL (HUD) ---
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Wizard HUD - Ghost Edition")
-        self.geometry("950x500") 
+        self.geometry("950x850") 
         self.attributes("-topmost", True)
+        self.protocol("WM_DELETE_WINDOW", self.fechar_completo)
         
         self.running = False
         self.hud_active = False
@@ -174,7 +179,6 @@ class App(ctk.CTk):
         self.show_points_active = False 
         self.tk_img = None 
         
-        # Variáveis de Controle de Tempo
         self.last_food_time = 0
         self.last_drink_time = 0
         self.start_session_time = 0
@@ -200,13 +204,20 @@ class App(ctk.CTk):
         self.setup_calibrate_tab()
         self.setup_skip_tab() 
 
+        # Hotkeys
         keyboard.add_hotkey('f6', self.trigger_f6)
         keyboard.add_hotkey('f7', self.trigger_f7)
         keyboard.add_hotkey('f9', self.trigger_f9)
         
         threading.Thread(target=self.listen_hotkeys, daemon=True).start()
 
-    # --- ABA PRINCIPAL ---
+    def fechar_completo(self):
+        self.running = False
+        try: keyboard.unhook_all()
+        except: pass
+        self.destroy()
+        os._exit(0)
+
     def setup_main_tab(self):
         self.status_label = ctk.CTkLabel(self.tab_main, text="AGUARDANDO START (F5)", font=("Arial", 24, "bold"), text_color="#555")
         self.status_label.pack(pady=(10, 5))
@@ -221,7 +232,6 @@ class App(ctk.CTk):
         self.lbl_total = ctk.CTkLabel(self.stats_frame, text="📊 Total: 0", font=("Arial", 16), text_color="#3498db")
         self.lbl_total.pack(side="left", expand=True, pady=10)
 
-        # Frame de Entradas com Grid
         self.frame_inputs = ctk.CTkFrame(self.tab_main)
         self.frame_inputs.pack(pady=10, padx=20, fill="both")
         self.frame_inputs.grid_columnconfigure((1, 3), weight=1)
@@ -230,7 +240,6 @@ class App(ctk.CTk):
         teclas_num = [str(i) for i in range(1, 6)]
         tempos = ["Desativado", "10", "15", "30", "45", "60", "90", "120"]
 
-        # Linha 0: Teclas Base
         ctk.CTkLabel(self.frame_inputs, text="Tecla Console:").grid(row=0, column=0, padx=10, pady=5, sticky="e")
         self.combo_tecla_console = ctk.CTkComboBox(self.frame_inputs, values=teclas_f, width=120)
         self.combo_tecla_console.set("f8")
@@ -241,13 +250,11 @@ class App(ctk.CTk):
         self.combo_hotkey.set("f5")
         self.combo_hotkey.grid(row=0, column=3, padx=10, pady=5, sticky="w")
 
-        # Linha 1: Feitiço
         ctk.CTkLabel(self.frame_inputs, text="Comando Feitiço:").grid(row=1, column=0, padx=10, pady=5, sticky="e")
         self.entry_comando = ctk.CTkEntry(self.frame_inputs, width=120)
         self.entry_comando.insert(0, "m11")
         self.entry_comando.grid(row=1, column=1, padx=10, pady=5, sticky="w")
 
-        # Linha 2: Comida
         ctk.CTkLabel(self.frame_inputs, text="Tecla Comida:").grid(row=2, column=0, padx=10, pady=5, sticky="e")
         self.combo_key_food = ctk.CTkComboBox(self.frame_inputs, values=teclas_num, width=120)
         self.combo_key_food.set("1")
@@ -258,7 +265,6 @@ class App(ctk.CTk):
         self.combo_time_food.set("15")
         self.combo_time_food.grid(row=2, column=3, padx=10, pady=5, sticky="w")
 
-        # Linha 3: Bebida
         ctk.CTkLabel(self.frame_inputs, text="Tecla Bebida:").grid(row=3, column=0, padx=10, pady=5, sticky="e")
         self.combo_key_drink = ctk.CTkComboBox(self.frame_inputs, values=teclas_num, width=120)
         self.combo_key_drink.set("2")
@@ -269,7 +275,6 @@ class App(ctk.CTk):
         self.combo_time_drink.set("10")
         self.combo_time_drink.grid(row=3, column=3, padx=10, pady=5, sticky="w")
 
-        # Linha 4: Segurança
         ctk.CTkLabel(self.frame_inputs, text="Fechar Jogo (Min):").grid(row=4, column=0, padx=10, pady=5, sticky="e")
         self.entry_quit_game = ctk.CTkEntry(self.frame_inputs, width=120)
         self.entry_quit_game.insert(0, "0")
@@ -280,12 +285,9 @@ class App(ctk.CTk):
         self.entry_shutdown_pc.insert(0, "0")
         self.entry_shutdown_pc.grid(row=4, column=3, padx=10, pady=5, sticky="w")
 
-        ctk.CTkLabel(self.tab_main, text="* Digite '0' para desativar os timers de segurança.", font=("Arial", 11, "italic"), text_color="#888").pack(pady=5)
-
         self.btn_hud = ctk.CTkButton(self.tab_main, text="ATIVAR MODO HUD COMPACTO", fg_color="#1f538d", height=45, command=self.toggle_hud_mode)
         self.btn_hud.pack(pady=10)
 
-    # --- LÓGICA DO MACRO (COM SOBREVIVÊNCIA) ---
     def macro_loop(self):
         cmd = self.entry_comando.get()
         console = self.combo_tecla_console.get()
@@ -297,85 +299,58 @@ class App(ctk.CTk):
             agora = time.time()
             decorrido_min = (agora - self.start_session_time) / 60
 
-            # Verificação de Segurança
             try:
                 min_quit = int(self.entry_quit_game.get())
                 min_shut = int(self.entry_shutdown_pc.get())
-                
                 if min_quit > 0 and decorrido_min >= min_quit:
                     os.system("taskkill /f /im ProjectZomboid64.exe")
-                    self.running = False
-                    break
+                    self.running = False; break
                 if min_shut > 0 and decorrido_min >= min_shut:
                     os.system("shutdown /s /t 60")
-                    self.running = False
-                    break
+                    self.running = False; break
             except: pass
 
-            # Funções de Status para o run_macro
             def dual_status_update(texto, text_color=None):
-                self.after(0, lambda: self.status_label.configure(text=texto, text_color=text_color if text_color else "#555"))
-                if self.hud_active and hasattr(self, 'hud_status_label'):
+                if self.winfo_exists():
+                    self.after(0, lambda: self.status_label.configure(text=texto, text_color=text_color if text_color else "#555"))
+                if self.hud_active and hasattr(self, 'hud_status_label') and self.hud_status_label.winfo_exists():
                     self.after(0, lambda: self.hud_status_label.configure(text=texto, text_color=text_color if text_color else "white"))
 
             class StatusProxy:
                 def configure(self, **kwargs):
-                    if "text" in kwargs: 
-                        dual_status_update(kwargs["text"], kwargs.get("text_color"))
+                    if "text" in kwargs: dual_status_update(kwargs["text"], kwargs.get("text_color"))
 
-            # Verificação de Sobrevivência (Comida/Bebida)
             def check_survival(last_time, combo_min, key, nome):
                 if combo_min.get() != "Desativado":
                     intervalo_sec = int(combo_min.get()) * 60
                     if time.time() - last_time >= intervalo_sec:
                         dual_status_update(f"USANDO {nome}...", "orange")
-                        pyautogui.press(key)
-                        time.sleep(1.2)
+                        pyautogui.press(key); time.sleep(1.2)
                         return time.time()
                 return last_time
 
             self.last_drink_time = check_survival(self.last_drink_time, self.combo_time_drink, self.combo_key_drink.get(), "BEBIDA")
             self.last_food_time = check_survival(self.last_food_time, self.combo_time_food, self.combo_key_food.get(), "COMIDA")
 
-            # Execução do Ciclo de Visão
-            run_macro(
-                comando=cmd, 
-                status_widget=StatusProxy(), 
-                stats_callback=self.update_stats, 
-                get_running_status=lambda: self.running, 
-                tecla_console=console,
-                skip_list=self.skip_list
-            )
-            
+            run_macro(comando=cmd, status_widget=StatusProxy(), stats_callback=self.update_stats, 
+                      get_running_status=lambda: self.running, tecla_console=console, skip_list=self.skip_list)
             if not self.running: break
 
-    # --- ABA SKIP ---
     def setup_skip_tab(self):
         self.skip_container = ctk.CTkFrame(self.tab_skip, fg_color="transparent")
         self.skip_container.pack(fill="both", expand=True, padx=20, pady=20)
-
         self.frame_avail = ctk.CTkFrame(self.skip_container)
         self.frame_avail.pack(side="left", fill="both", expand=True, padx=10)
-        ctk.CTkLabel(self.frame_avail, text="PADRÕES DISPONÍVEIS", font=("Arial", 14, "bold")).pack(pady=5)
-        
-        self.list_available = tk.Listbox(self.frame_avail, bg="#2b2b2b", fg="white", 
-                                        selectbackground="#1f538d", borderwidth=0, font=("Arial", 12))
+        self.list_available = tk.Listbox(self.frame_avail, bg="#2b2b2b", fg="white", selectbackground="#1f538d", borderwidth=0, font=("Arial", 12))
         self.list_available.pack(fill="both", expand=True, padx=5, pady=5)
-
         self.frame_mid = ctk.CTkFrame(self.skip_container, fg_color="transparent")
         self.frame_mid.pack(side="left", padx=10)
-        
         ctk.CTkButton(self.frame_mid, text="Adicionar >>", width=100, command=self.add_to_skip).pack(pady=10)
         ctk.CTkButton(self.frame_mid, text="<< Remover", width=100, command=self.remove_from_skip).pack(pady=10)
-
         self.frame_skip = ctk.CTkFrame(self.skip_container)
         self.frame_skip.pack(side="left", fill="both", expand=True, padx=10)
-        ctk.CTkLabel(self.frame_skip, text="LISTA DE SKIP (IGNORAR)", font=("Arial", 14, "bold"), text_color="#e74c3c").pack(pady=5)
-        
-        self.list_skipped = tk.Listbox(self.frame_skip, bg="#2b2b2b", fg="#ff4444", 
-                                      selectbackground="#1f538d", borderwidth=0, font=("Arial", 12))
+        self.list_skipped = tk.Listbox(self.frame_skip, bg="#2b2b2b", fg="#ff4444", selectbackground="#1f538d", borderwidth=0, font=("Arial", 12))
         self.list_skipped.pack(fill="both", expand=True, padx=5, pady=5)
-
         self.refresh_skip_ui()
 
     def refresh_skip_ui(self):
@@ -410,7 +385,6 @@ class App(ctk.CTk):
             except: return []
         return []
 
-    # --- ABA CALIBRAÇÃO ---
     def setup_calibrate_tab(self):
         self.canvas = ctk.CTkCanvas(self.tab_calibrate, width=SCREEN_W, height=SCREEN_H, bg="black", highlightthickness=0)
         self.canvas.place(x=0, y=0)
@@ -480,6 +454,7 @@ class App(ctk.CTk):
 
     def redraw_canvas(self):
         cv = self.canvas_hud if (self.full_calib_active and hasattr(self, 'canvas_hud')) else self.canvas
+        if not cv.winfo_exists(): return
         cv.delete("pt")
         if not self.temp_points or not self.show_points_active: return
         for p in self.temp_points:
@@ -493,13 +468,16 @@ class App(ctk.CTk):
     def ghost_playback_thread(self):
         self.is_playing_preview = True
         cv = self.canvas_hud if (self.full_calib_active and hasattr(self, 'canvas_hud')) else self.canvas
+        if not cv.winfo_exists(): self.is_playing_preview = False; return
         ghost = cv.create_oval(0,0,0,0, fill="#00FF00", outline="white", width=2, tags="ghost")
         for p in self.temp_points:
-            if not self.show_points_active: break
+            if not self.show_points_active or not cv.winfo_exists(): break
             dx, dy, wait = (p.get("x") + ROI_OFFSET_X, p.get("y"), p.get("wait", 0.01))
             cv.coords(ghost, dx-6, dy-6, dx+6, dy+6)
             time.sleep(wait)
-        cv.delete("ghost"); self.is_playing_preview = False
+        try: cv.delete("ghost")
+        except: pass
+        self.is_playing_preview = False
 
     def toggle_full_calibration(self):
         self.full_calib_active = not self.full_calib_active
@@ -534,23 +512,36 @@ class App(ctk.CTk):
     def toggle_hud_mode(self):
         if not self.hud_active:
             self.hud_active = True
-            self.geometry("400x250+10+10"); self.attributes("-alpha", 0.8); self.tabview.pack_forget()
+            self.tabview.pack_forget() 
+            self.update_idletasks()   
+            
+            self.geometry("400x250+10+10")
+            self.attributes("-alpha", 0.8)
+            
             self.hud_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
             self.hud_frame.pack(fill="both", expand=True)
+            
             ctk.CTkLabel(self.hud_frame, text="WIZARD HUD", font=("Arial", 14, "bold"), text_color="#00FFFF").pack(pady=5)
-            self.hud_status_label = ctk.CTkLabel(self.hud_frame, text=self.status_label.cget("text"), font=("Arial", 16, "bold"))
+            
+            txt_atual = self.status_label.cget("text")
+            self.hud_status_label = ctk.CTkLabel(self.hud_frame, text=txt_atual, font=("Arial", 16, "bold"))
             self.hud_status_label.pack(pady=10)
+            
             ctk.CTkButton(self.hud_frame, text="VOLTAR (MENU)", height=25, command=self.toggle_hud_mode).pack(pady=10)
         else:
-            self.hud_active = False; self.attributes("-alpha", 1.0); self.geometry("950x850")
+            self.hud_active = False
             if hasattr(self, 'hud_frame'): self.hud_frame.destroy()
+            
+            self.attributes("-alpha", 1.0)
+            self.geometry("950x850")
             self.tabview.pack(padx=10, pady=10, fill="both", expand=True)
 
     def update_stats(self, tipo):
         self.stats[tipo] += 1; self.stats["total"] += 1
-        self.lbl_suc.configure(text=f"✅ Sucessos: {self.stats['sucessos']}")
-        self.lbl_fail.configure(text=f"❌ Falhas: {self.stats['fracassos']}")
-        self.lbl_total.configure(text=f"📊 Total: {self.stats['total']}")
+        if self.winfo_exists():
+            self.after(0, lambda: self.lbl_suc.configure(text=f"✅ Sucessos: {self.stats['sucessos']}"))
+            self.after(0, lambda: self.lbl_fail.configure(text=f"❌ Falhas: {self.stats['fracassos']}"))
+            self.after(0, lambda: self.lbl_total.configure(text=f"📊 Total: {self.stats['total']}"))
 
     def save_calibration(self):
         if self.current_editing_pattern:
@@ -566,14 +557,17 @@ class App(ctk.CTk):
 
     def update_pattern_list(self):
         if not os.path.exists("padroes"): os.makedirs("padroes")
-        self.pattern_files = [f for f in os.listdir("padroes") if f.lower().endswith(('.png', '.jpg'))]
+        self.pattern_files = [f for f in os.listdir("padroes") if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
 
     def listen_hotkeys(self):
         while True:
             try:
+                if not self.winfo_exists(): break
                 hk = self.combo_hotkey.get().lower()
-                if keyboard.is_pressed(hk): self.after(0, self.toggle_macro); time.sleep(1.0)
-            except: pass
+                if keyboard.is_pressed(hk): 
+                    self.after(0, self.toggle_macro)
+                    time.sleep(1.0) 
+            except: break
             time.sleep(0.05)
 
     def toggle_macro(self):
@@ -581,11 +575,14 @@ class App(ctk.CTk):
         color = "#28a745" if self.running else "#ff4444"
         txt = "STATUS: RODANDO" if self.running else "STATUS: PARADO"
         self.status_label.configure(text=txt, text_color=color)
-        if self.hud_active and hasattr(self, 'hud_status_label'):
+        if self.hud_active and hasattr(self, 'hud_status_label') and self.hud_status_label.winfo_exists():
             self.hud_status_label.configure(text=txt, text_color=color)
         if self.running: threading.Thread(target=self.macro_loop, daemon=True).start()
 
 # --- EXECUÇÃO ---
 if __name__ == "__main__":
-    login = LoginWindow()
-    login.mainloop()
+    try:
+        login = LoginWindow()
+        login.mainloop()
+    except KeyboardInterrupt:
+        os._exit(0)

@@ -3,8 +3,12 @@ import json as jsond
 import time
 import platform
 import subprocess
+import logging
 from datetime import datetime, timezone, timedelta
 from discord_interactions import verify_key
+
+# Configuração de log para ajudar no diagnóstico
+logger = logging.getLogger(__name__)
 
 try:
     if os.name == 'nt':
@@ -13,9 +17,10 @@ try:
 except ModuleNotFoundError:
     print("Dependências faltando. Instalando módulos necessários...")
     os.system("pip install pywin32 requests discord-interactions qrcode pillow")
-    print("Módulos instalados! Reinicie o script.")
-    time.sleep(1.5)
-    os._exit(1)
+    print("Módulos instalados! Reinicie o script manualmente.")
+    time.sleep(2)
+    # Não usamos exit aqui para evitar fechar o terminal do usuário sem ele ler
+    raise SystemExit
 
 class api:
     name = ownerid = version = hash_to_check = ""
@@ -29,9 +34,7 @@ class api:
 
     def __init__(self, name, ownerid, version, hash_to_check):
         if len(ownerid) != 10:
-            print("OwnerID inválido. Verifique no painel do KeyAuth.")
-            time.sleep(3)
-            os._exit(1)
+            raise ValueError("OwnerID inválido. Deve ter 10 caracteres conforme o painel KeyAuth.")
         
         self.name = name
         self.ownerid = ownerid
@@ -53,24 +56,33 @@ class api:
 
         response = self.__do_request(post_data)
 
-        if response in ["KeyAuth_Invalid", "KeyAuth_Error"]:
-            print(f"Erro na Inicialização: {response}")
+        if response in ["KeyAuth_Invalid", "KeyAuth_Error", "KeyAuth_Timeout"]:
+            print(f"❌ Erro crítico na inicialização do KeyAuth: {response}")
+            self.initialized = False
             return
 
-        json_data = jsond.loads(response)
+        try:
+            json_data = jsond.loads(response)
+        except jsond.JSONDecodeError:
+            print("❌ Erro ao processar resposta do servidor (JSON Inválido).")
+            return
 
         if json_data.get("message") == "invalidver":
             if json_data.get("download") != "":
-                print("Nova versão encontrada. Baixando...")
-                os.system(f"start {json_data['download']}")
+                print(f"📢 Nova versão encontrada: {json_data['download']}")
+                if platform.system() == 'Windows':
+                    os.system(f"start {json_data['download']}")
+            print("❌ Versão obsoleta. O programa será encerrado.")
+            time.sleep(3)
             os._exit(1)
 
         if json_data.get("success"):
             self.sessionid = json_data["sessionid"]
             self.initialized = True
+        else:
+            print(f"❌ Falha no Init: {json_data.get('message')}")
 
-    def register(self, user, password, license, hwid=None):
-        """Método de registro que estava faltando no seu código anterior"""
+    def register(self, user, password, license_key, hwid=None):
         self.checkinit()
         hwid = hwid or others.get_hwid()
 
@@ -78,20 +90,14 @@ class api:
             "type": "register",
             "username": user,
             "pass": password,
-            "key": license,
+            "key": license_key,
             "hwid": hwid,
             "sessionid": self.sessionid,
             "name": self.name,
             "ownerid": self.ownerid
         }
 
-        response = self.__do_request(post_data)
-        json_data = jsond.loads(response)
-
-        if json_data["success"]:
-            self.__load_user_data(json_data["info"])
-            return True, json_data["message"]
-        return False, json_data["message"]
+        return self.__process_auth_response(self.__do_request(post_data))
 
     def login(self, user, password, hwid=None):
         self.checkinit()
@@ -107,13 +113,7 @@ class api:
             "ownerid": self.ownerid
         }
         
-        response = self.__do_request(post_data)
-        json_data = jsond.loads(response)
-
-        if json_data["success"]:
-            self.__load_user_data(json_data["info"])
-            return True, json_data["message"]
-        return False, json_data["message"]
+        return self.__process_auth_response(self.__do_request(post_data))
 
     def license(self, key, hwid=None):
         self.checkinit()
@@ -128,18 +128,14 @@ class api:
             "ownerid": self.ownerid
         }
         
-        response = self.__do_request(post_data)
-        json_data = jsond.loads(response)
-
-        if json_data["success"]:
-            self.__load_user_data(json_data["info"])
-            return True, json_data["message"]
-        return False, json_data["message"]
+        return self.__process_auth_response(self.__do_request(post_data))
 
     def checkinit(self):
         if not self.initialized:
-            print("API não inicializada. Chame o método init() primeiro.")
-            os._exit(1)
+            print("⚠️ API não inicializada. Tentando inicializar...")
+            self.init()
+            if not self.initialized:
+                raise ConnectionError("Não foi possível conectar ao servidor de autenticação.")
         return True
 
     def __do_request(self, post_data):
@@ -151,6 +147,7 @@ class api:
             if response.status_code != 200:
                 return "KeyAuth_Error"
 
+            # Alguns tipos de resposta não assinam o cabeçalho
             if post_data["type"] in ["log", "file"]:
                 return response.text
 
@@ -160,8 +157,9 @@ class api:
             if not signature or not timestamp:
                 return "KeyAuth_Invalid"
 
+            # Verificação de sincronia de tempo (Prevenção de Replay Attack)
             server_time = datetime.fromtimestamp(int(timestamp), timezone.utc)
-            if (datetime.now(timezone.utc) - server_time) > timedelta(seconds=30):
+            if abs((datetime.now(timezone.utc) - server_time).total_seconds()) > 60:
                 return "KeyAuth_Timeout"
 
             pub_key = '5586b4bc69c7a4b487e4563a4cd96afd39140f919bd31cea7d1c6a1e8439422b'
@@ -169,17 +167,29 @@ class api:
                 return "KeyAuth_Invalid_Signature"
 
             return response.text
-        except Exception:
+        except Exception as e:
+            logger.error(f"Erro na requisição KeyAuth: {e}")
             return "KeyAuth_Error"
 
+    def __process_auth_response(self, response):
+        try:
+            json_data = jsond.loads(response)
+            if json_data["success"]:
+                self.__load_user_data(json_data["info"])
+                return True, json_data["message"]
+            return False, json_data["message"]
+        except:
+            return False, "Erro na resposta do servidor."
+
     def __load_user_data(self, data):
-        self.user_data.username = data["username"]
-        self.user_data.ip = data["ip"]
-        self.user_data.hwid = data["hwid"] or "N/A"
-        # Garante que acessamos a lista de inscrições com segurança
-        if data.get("subscriptions"):
-            self.user_data.expires = data["subscriptions"][0]["expiry"]
-            self.user_data.subscription = data["subscriptions"][0]["subscription"]
+        self.user_data.username = data.get("username", "N/A")
+        self.user_data.ip = data.get("ip", "N/A")
+        self.user_data.hwid = data.get("hwid") or "N/A"
+        
+        subs = data.get("subscriptions", [])
+        if subs:
+            self.user_data.expires = subs[0].get("expiry", "N/A")
+            self.user_data.subscription = subs[0].get("subscription", "N/A")
 
 class others:
     @staticmethod
@@ -187,13 +197,16 @@ class others:
         try:
             if platform.system() == 'Windows':
                 import win32security
+                # Tenta pegar o SID do usuário logado como HWID único
                 winuser = os.getlogin()
-                sid = win32security.LookupAccountName(None, winuser)[0]
+                sid, domain, type = win32security.LookupAccountName(None, winuser)
                 return win32security.ConvertSidToStringSid(sid)
             elif platform.system() == 'Linux':
-                with open("/etc/machine-id") as f:
-                    return f.read().strip()
-            else:
-                return "NON_WINDOWS_HWID"
-        except:
-            return "UNKNOWN_HWID"
+                if os.path.exists("/etc/machine-id"):
+                    with open("/etc/machine-id") as f:
+                        return f.read().strip()
+            return "DEFAULT_HWID"
+        except Exception:
+            # Fallback para UUID se falhar no Windows
+            import uuid
+            return str(uuid.getnode())
