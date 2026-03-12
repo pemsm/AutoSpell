@@ -11,8 +11,8 @@ import logging
 import hashlib
 import sys
 from PIL import Image, ImageTk
-from vision_engine import run_macro
-from keyauth import api 
+from core.vision_engine import run_macro
+from core.keyauth import api 
 
 # --- GARANTIA DE DIRETÓRIO ---
 os.chdir(os.path.dirname(os.path.abspath(__file__)))

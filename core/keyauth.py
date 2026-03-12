@@ -4,6 +4,7 @@ import time
 import platform
 import subprocess
 import logging
+import hashlib
 from datetime import datetime, timezone, timedelta
 from discord_interactions import verify_key
 
@@ -19,11 +20,10 @@ except ModuleNotFoundError:
     os.system("pip install pywin32 requests discord-interactions qrcode pillow")
     print("Módulos instalados! Reinicie o script manualmente.")
     time.sleep(2)
-    # Não usamos exit aqui para evitar fechar o terminal do usuário sem ele ler
     raise SystemExit
 
 class api:
-    name = ownerid = version = hash_to_check = ""
+    name = ownerid = secret = version = hash_to_check = ""
     sessionid = enckey = ""
     initialized = False
 
@@ -32,32 +32,35 @@ class api:
 
     user_data = user_data_class()
 
-    def __init__(self, name, ownerid, version, hash_to_check):
+    def __init__(self, name, ownerid, secret, version, hash_to_check):
         if len(ownerid) != 10:
             raise ValueError("OwnerID inválido. Deve ter 10 caracteres conforme o painel KeyAuth.")
         
         self.name = name
         self.ownerid = ownerid
+        self.secret = secret
         self.version = version
         self.hash_to_check = hash_to_check
-        self.init()
+        # O init() não é chamado aqui para evitar travar a Main Thread da UI
 
     def init(self):
         if self.sessionid != "":
             return
         
+        # O campo 'init_set' é OBRIGATÓRIO na API 1.3 para enviar o Secret
         post_data = {
             "type": "init",
             "ver": self.version,
             "hash": self.hash_to_check,
             "name": self.name,
-            "ownerid": self.ownerid
+            "ownerid": self.ownerid,
+            "init_set": self.secret 
         }
 
         response = self.__do_request(post_data)
 
         if response in ["KeyAuth_Invalid", "KeyAuth_Error", "KeyAuth_Timeout"]:
-            print(f"❌ Erro crítico na inicialização do KeyAuth: {response}")
+            print(f"❌ Erro de comunicação com o servidor: {response}")
             self.initialized = False
             return
 
@@ -67,7 +70,11 @@ class api:
             print("❌ Erro ao processar resposta do servidor (JSON Inválido).")
             return
 
-        if json_data.get("message") == "invalidver":
+        if json_data.get("success"):
+            self.sessionid = json_data["sessionid"]
+            self.enckey = json_data.get("enckey", "")
+            self.initialized = True
+        elif json_data.get("message") == "invalidver":
             if json_data.get("download") != "":
                 print(f"📢 Nova versão encontrada: {json_data['download']}")
                 if platform.system() == 'Windows':
@@ -75,12 +82,10 @@ class api:
             print("❌ Versão obsoleta. O programa será encerrado.")
             time.sleep(3)
             os._exit(1)
-
-        if json_data.get("success"):
-            self.sessionid = json_data["sessionid"]
-            self.initialized = True
         else:
+            # Aqui aparecerá o motivo real se o Token ainda falhar
             print(f"❌ Falha no Init: {json_data.get('message')}")
+            self.initialized = False
 
     def register(self, user, password, license_key, hwid=None):
         self.checkinit()
@@ -132,7 +137,6 @@ class api:
 
     def checkinit(self):
         if not self.initialized:
-            print("⚠️ API não inicializada. Tentando inicializar...")
             self.init()
             if not self.initialized:
                 raise ConnectionError("Não foi possível conectar ao servidor de autenticação.")
@@ -140,14 +144,15 @@ class api:
 
     def __do_request(self, post_data):
         try:
+            # Adicionado headers básicos para garantir que o servidor aceite o POST
+            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
             response = requests.post(
-                "https://keyauth.win/api/1.3/", data=post_data, timeout=10
+                "https://keyauth.win/api/1.3/", data=post_data, headers=headers, timeout=10
             )
 
             if response.status_code != 200:
                 return "KeyAuth_Error"
 
-            # Alguns tipos de resposta não assinam o cabeçalho
             if post_data["type"] in ["log", "file"]:
                 return response.text
 
@@ -157,7 +162,6 @@ class api:
             if not signature or not timestamp:
                 return "KeyAuth_Invalid"
 
-            # Verificação de sincronia de tempo (Prevenção de Replay Attack)
             server_time = datetime.fromtimestamp(int(timestamp), timezone.utc)
             if abs((datetime.now(timezone.utc) - server_time).total_seconds()) > 60:
                 return "KeyAuth_Timeout"
@@ -197,7 +201,6 @@ class others:
         try:
             if platform.system() == 'Windows':
                 import win32security
-                # Tenta pegar o SID do usuário logado como HWID único
                 winuser = os.getlogin()
                 sid, domain, type = win32security.LookupAccountName(None, winuser)
                 return win32security.ConvertSidToStringSid(sid)
@@ -207,6 +210,22 @@ class others:
                         return f.read().strip()
             return "DEFAULT_HWID"
         except Exception:
-            # Fallback para UUID se falhar no Windows
             import uuid
             return str(uuid.getnode())
+
+    @staticmethod
+    def get_self_hash():
+        sha256_hash = hashlib.sha256()
+        with open(os.path.abspath(__file__), "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+
+# --- INSTANCIAÇÃO DA API ---
+keyauthapp = api(
+    name = "Wizard HUD - Ghost Edition",
+    ownerid = "TqGr3LrSGL",
+    secret = "144abb63da41c5424a5c54eb5f86a4ec31e7c7191f56292056c93fcd73b8c395",
+    version = "1.1.0",
+    hash_to_check = "" 
+)
